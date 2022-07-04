@@ -1,4 +1,5 @@
 import dedent from 'ts-dedent';
+import moment from 'moment';
 import {rules, Rule, rulesDict, Example, getDisabledRules} from './rules';
 import {escapeRegExp, yamlRegex} from './utils';
 
@@ -157,6 +158,54 @@ describe('Rules tests', () => {
         `;
       expect(rulesDict['header-increment'].apply(before)).toBe(after);
     });
+    it('Handles change from decrement to regular increment', () => {
+      const before = dedent`
+        # H1
+        ##### H5
+        ####### H7
+        ###### H6
+        ## H2
+        `;
+      const after = dedent`
+        # H1
+        ## H5
+        ### H7
+        ## H6
+        ## H2
+        `;
+      expect(rulesDict['header-increment'].apply(before)).toBe(after);
+    });
+    it('Handles a variety of changes in header size', () => {
+      const before = dedent`
+        # H1
+        ### H3
+        #### H4
+        ###### H6
+        ## H2
+        # H1
+        ## H2
+        ### H3
+        #### H4
+        ###### H6
+        ##### H5
+        ### H3
+        `;
+      const after = dedent`
+        # H1
+        ## H3
+        ### H4
+        #### H6
+        ## H2
+        # H1
+        ## H2
+        ### H3
+        #### H4
+        ##### H6
+        ##### H5
+        ### H3
+        `;
+      expect(rulesDict['header-increment'].apply(before)).toBe(after);
+    });
   });
   describe('Capitalize Headings', () => {
     it('Ignores not words', () => {
@@ -166,6 +215,7 @@ describe('Rules tests', () => {
         ## this is a sentence.
         ## I can't do this
         ## comma, comma, comma
+        ## 1.1 the Header
         `;
       const after = dedent`
         # h1
@@ -173,6 +223,7 @@ describe('Rules tests', () => {
         ## This is a Sentence.
         ## I Can't Do This
         ## Comma, Comma, Comma
+        ## 1.1 The Header
         `;
       const options = Object.assign({
         'Style': 'Title Case',
@@ -195,7 +246,18 @@ describe('Rules tests', () => {
       const after = dedent`
         # This is a heading
         `;
-      expect(rulesDict['capitalize-headings'].apply(before, {'Style': 'First Letter'})).toBe(after);
+      expect(rulesDict['capitalize-headings'].apply(before, {'Style': 'First letter'})).toBe(after);
+    });
+    it('Can capitalize only first letter that is a - Z', () => {
+      const before = dedent`
+        # 1. heading attempt
+        # 1 John
+        `;
+      const after = dedent`
+        # 1. Heading attempt
+        # 1 John
+        `;
+      expect(rulesDict['capitalize-headings'].apply(before, {'Style': 'First letter'})).toBe(after);
     });
     it('Can capitalize to all caps', () => {
       const before = dedent`
@@ -204,7 +266,7 @@ describe('Rules tests', () => {
       const after = dedent`
         # THIS IS A HEADING
         `;
-      expect(rulesDict['capitalize-headings'].apply(before, {'Style': 'All Caps'})).toBe(after);
+      expect(rulesDict['capitalize-headings'].apply(before, {'Style': 'ALL CAPS'})).toBe(after);
     });
   });
   describe('File Name Heading', () => {
@@ -279,6 +341,123 @@ describe('Paragraph blank lines', () => {
     \t- 2
         - 3
     `;
+    expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
+  });
+  // accounts for https://github.com/platers/obsidian-linter/issues/250
+  it('Paragraphs that start with numbers are spaced out', () => {
+    const before = dedent`
+    # Hello world
+
+
+    123 foo
+    123 bar
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    123 foo
+
+    123 bar
+    `;
+
+    expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
+  });
+  // accounts for https://github.com/platers/obsidian-linter/issues/250
+  it('Paragraphs that start with foreign characters are spaced out', () => {
+    const before = dedent`
+    # Hello world
+
+
+    测试 foo
+    测试 bar
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    测试 foo
+
+    测试 bar
+    `;
+
+    expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
+  });
+  // accounts for https://github.com/platers/obsidian-linter/issues/250
+  it('Paragraphs that start with whitespace characters are spaced out', () => {
+    const before = dedent`
+    # Hello world
+
+     foo
+     bar
+    `;
+
+    const after = dedent`
+    # Hello world
+
+     foo
+
+     bar
+    `;
+
+    expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
+  });
+  it('Make sure blockquotes are not affected', () => {
+    const before = dedent`
+    # Hello world
+
+    > blockquote
+    > blockquote line 2
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    > blockquote
+    > blockquote line 2
+    `;
+
+    expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
+  });
+  it('Make sure lists are not affected', () => {
+    const before = dedent`
+    # Hello world
+
+    > blockquote
+    > blockquote line 2
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    > blockquote
+    > blockquote line 2
+    `;
+
+    expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
+  });
+  it('Make sure lines ending in a line break are not affected', () => {
+    const before = dedent`
+    # Hello world
+
+
+    paragraph line 1 <br>
+    paragraph line 2  
+    paragraph line 3 <br/>
+    paragraph final line
+
+
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    paragraph line 1 <br>
+    paragraph line 2  
+    paragraph line 3 <br/>
+    paragraph final line
+    `;
+
     expect(rulesDict['paragraph-blank-lines'].apply(before)).toBe(after);
   });
 });
@@ -473,8 +652,6 @@ describe('Move Footnotes to the bottom', () => {
 
    Prima prompta partiendo ius ne. Modo omnes neglegentur cu vel, nisl illum vel ex. Mel et vocent scribentur.[^41]
 
-
-
    [^1]: See @JIPPChristKingPaul2015, 50.
    [^2]: Jipp in -@JIPPChristKingPaul2015, 45, says, “Sale populo petentium vel eu, eam in alii novum voluptatum, te lorem postulant has”.
    [^3]: This is from Journal article --@gaventaLouisMartynGalatians2000, 99.
@@ -491,9 +668,22 @@ describe('Move Footnotes to the bottom', () => {
    `;
     expect(rulesDict['move-footnotes-to-the-bottom'].apply(before)).toBe(after);
   });
+  it('Footnote already at the bottom does not add an extra newline', () => {
+    const before = dedent`
+    Line
+
+    [^alpha]: bravo and charlie.
+    `;
+    const after = dedent`
+    Line
+
+    [^alpha]: bravo and charlie.
+    `;
+    expect(rulesDict['move-footnotes-to-the-bottom'].apply(before)).toBe(after);
+  });
 });
 describe('yaml timestamp', () => {
-  it('Doesnt add date created if already there', () => {
+  it('Doesn\'t add date created if already there', () => {
     const before = dedent`
     ---
     date created: 2019-01-01
@@ -504,9 +694,9 @@ describe('yaml timestamp', () => {
     date created: 2019-01-01
     ---
     `;
-    expect(rulesDict['yaml-timestamp'].apply(before, {'Date Created': true, 'Date Created Key': 'date created'})).toBe(after);
+    expect(rulesDict['yaml-timestamp'].apply(before, {'Date Created': true, 'Date Created Key': 'date created', 'moment': moment})).toBe(after);
   });
-  it('Respects created and modified key', () => {
+  it('Respects created key', () => {
     const before = dedent`
     ---
     created: 2019-01-01
@@ -517,11 +707,303 @@ describe('yaml timestamp', () => {
     created: 2019-01-01
     ---
     `;
-    expect(rulesDict['yaml-timestamp'].apply(before, {'Date Created': true, 'Date Created Key': 'created'})).toBe(after);
+    expect(rulesDict['yaml-timestamp'].apply(before, {'Date Created': true, 'Date Created Key': 'created', 'moment': moment})).toBe(after);
+  });
+  it('Respects modified key when nothing has changed', () => {
+    const before = dedent`
+    ---
+    modified: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+    const after = dedent`
+    ---
+    modified: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+
+    const options = {
+      'Date Created': false,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'metadata: file modified time': '2020-01-01T00:00:00-00:00',
+      'Current Time': moment('Thursday, January 2nd 2020, 12:00:00 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Already Modified': false,
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates modified value when nothing has changed, but date modified is more than 5 seconds different than the file metadata', () => {
+    const before = dedent`
+    ---
+    modified: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+    const after = dedent`
+    ---
+    modified: Thursday, January 2nd 2020, 12:00:00 am
+    ---
+    `;
+
+    const options = {
+      'Date Created': false,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'metadata: file modified time': '2020-01-02T00:00:03-00:00',
+      'Current Time': moment('Thursday, January 2nd 2020, 12:00:00 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'Already Modified': false,
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates modified value when format has changed', () => {
+    const before = dedent`
+    ---
+    modified: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+    const after = dedent`
+    ---
+    modified: Wednesday, January 1st 2020
+    ---
+    `;
+
+    const options = {
+      'Date Created': false,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'metadata: file modified time': '2020-01-01T00:00:00-00:00',
+      'Current Time': moment('Wednesday, January 1st 2020, 12:00:00 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Format': 'dddd, MMMM Do YYYY',
+      'Already Modified': false,
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates modified key when something has changed outside of the YAML timestamp rule', () => {
+    const before = dedent`
+    ---
+    modified: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+    const after = dedent`
+    ---
+    modified: Saturday, February 1st 2020, 12:00:00 am
+    ---
+    `;
+
+    const options = {
+      'Date Created': false,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'metadata: file modified time': '2020-01-30T00:00:00-00:00',
+      'Current Time': moment('Saturday, February 1st 2020, 12:00:00 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Already Modified': true,
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates modified key when locale has changed', () => {
+    const before = dedent`
+    ---
+    modified: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+    const after = dedent`
+    ---
+    modified: samedi, février 1er 2020, 12:00:05 am
+    ---
+    `;
+
+    moment.locale('fr');
+    const options = {
+      'Date Created': false,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'metadata: file modified time': '2020-02-01T00:00:00-00:00',
+      'Current Time': moment('samedi, février 1er 2020, 12:00:05 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Already Modified': false,
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+    moment.locale('en');
+  });
+  it('Updates modified key when something has changed inside of the YAML timestamp rule', () => {
+    const before = dedent`
+    ---
+    modified: Thursday, January 2nd 2020, 12:00:00 am
+    ---
+    `;
+    const after = dedent`
+    ---
+    modified: Thursday, January 2nd 2020, 12:00:05 am
+    created: Wednesday, January 1st 2020, 12:00:00 am
+    ---
+    `;
+
+    const options = {
+      'Date Created': true,
+      'Date Modified': true,
+      'Date Created Key': 'created',
+      'Date Modified Key': 'modified',
+      'metadata: file created time': '2020-01-01T00:00:00-00:00',
+      'metadata: file modified time': '2020-01-02T00:00:00-00:00',
+      'Current Time': moment('Thursday, January 2nd 2020, 12:00:05 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Already Modified': false,
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates modified key when present, but lacks a value', () => {
+    const before = dedent`
+    ---
+    tag: tag1
+    modified: 
+    location: "path"
+    ---
+    `;
+    const after = dedent`
+    ---
+    tag: tag1
+    modified: Saturday, February 1st 2020, 12:00:00 am
+    location: "path"
+    ---
+    `;
+
+    const options = {
+      'Date Created': false,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'metadata: file modified time': '2020-01-30T00:00:00-00:00',
+      'Already Modified': false,
+      'Current Time': moment('Saturday, February 1st 2020, 12:00:00 am', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates created key when present, but lacks a value', () => {
+    const before = dedent`
+    ---
+    tag: tag1
+    created: 
+    location: "path"
+    ---
+    `;
+    const after = dedent`
+    ---
+    tag: tag1
+    created: Saturday, February 1st 2020, 12:00:00 am
+    location: "path"
+    ---
+    `;
+
+    const options = {
+      'Date Created': true,
+      'Date Modified': false,
+      'Date Created Key': 'created',
+      'metadata: file created time': '2020-02-01T00:00:00-00:00',
+      'Already Modified': false,
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates created value when format has changed', () => {
+    const before = dedent`
+    ---
+    tag: tag1
+    created: Saturday, February 1st 2020, 12:00:00 am
+    location: "path"
+    ---
+    `;
+    const after = dedent`
+    ---
+    tag: tag1
+    created: Saturday, February 1st 2020
+    location: "path"
+    ---
+    `;
+
+    const options = {
+      'Date Created': true,
+      'Date Modified': false,
+      'Date Created Key': 'created',
+      'metadata: file created time': '2020-02-01T00:00:00-00:00',
+      'Format': 'dddd, MMMM Do YYYY',
+      'Already Modified': false,
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+  });
+  it('Updates created value when locale has changed', () => {
+    const before = dedent`
+    ---
+    tag: tag1
+    created: Saturday, February 1st 2020, 12:00:00 am
+    location: "path"
+    ---
+    `;
+    const after = dedent`
+    ---
+    tag: tag1
+    created: samedi, février 1er 2020, 12:00:00 am
+    location: "path"
+    ---
+    `;
+
+    moment.locale('fr');
+    const options = {
+      'Date Created': true,
+      'Date Modified': false,
+      'Date Created Key': 'created',
+      'metadata: file created time': '2020-02-01T00:00:00-00:00',
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'Already Modified': false,
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
+    moment.locale('en');
+  });
+  it('Updates modified value when format has changed causing created value updated', () => {
+    const before = dedent`
+    ---
+    tag: tag1
+    modified: Saturday, February 1st 2020, 12:00:00 am
+    created: Wednesday, January 1st 2020
+    location: "path"
+    ---
+    `;
+    const after = dedent`
+    ---
+    tag: tag1
+    modified: Tuesday, February 4th 2020, 6:00:00 pm
+    created: Wednesday, January 1st 2020, 12:00:00 am
+    location: "path"
+    ---
+    `;
+
+    const options = {
+      'Date Created': true,
+      'Date Modified': true,
+      'Date Modified Key': 'modified',
+      'Date Created Key': 'created',
+      'metadata: file created time': '2020-01-01T00:00:00-00:00',
+      'metadata: file modified time': '2020-02-02T00:00:00-00:00',
+      'Current Time': moment('Tuesday, February 4th 2020, 6:00:00 pm', 'dddd, MMMM Do YYYY, h:mm:ss a'),
+      'Format': 'dddd, MMMM Do YYYY, h:mm:ss a',
+      'Already Modified': false,
+      'moment': moment,
+    };
+    expect(rulesDict['yaml-timestamp'].apply(before, options)).toBe(after);
   });
 });
 describe('Insert yaml attributes', () => {
-  it('Inits yaml is not exist', () => {
+  it('Inits yaml if it does not exist', () => {
     const before = dedent`
     `;
     const after = dedent`
@@ -531,6 +1013,54 @@ describe('Insert yaml attributes', () => {
     
     `;
     expect(rulesDict['insert-yaml-attributes'].apply(before, {'Text to insert': 'tags:'})).toBe(after);
+  });
+  // accounts for https://github.com/platers/obsidian-linter/issues/176
+  it('Inits yaml when the file has --- in it and no frontmatter', () => {
+    const before = dedent`
+    # Heading
+    Text
+
+    # Heading
+    - Text
+     - Text
+    ---
+
+    `;
+    const after = dedent`
+    ---
+    tags:
+    ---
+    # Heading
+    Text
+
+    # Heading
+    - Text
+     - Text
+    ---
+
+    `;
+    expect(rulesDict['insert-yaml-attributes'].apply(before, {'Text to insert': 'tags:'})).toBe(after);
+  });
+  // accounts for https://github.com/platers/obsidian-linter/issues/157
+  it('When a file has tabs at the start of a line in the frontmatter, the yaml insertion still works leaving other tabs as they were', () => {
+    const before = dedent`
+    ---
+    title: this title\thas a tab
+    tags:
+    \t- test1
+    \t- test2
+    ---
+    `;
+    const after = dedent`
+    ---
+    blob:
+    title: this title\thas a tab
+    tags:
+    \t- test1
+    \t- test2
+    ---
+    `;
+    expect(rulesDict['insert-yaml-attributes'].apply(before, {'Text to insert': 'blob:'})).toBe(after);
   });
 });
 
@@ -672,5 +1202,156 @@ describe('YAML Title', () => {
     `;
 
     expect(rulesDict['yaml-title'].apply(before, {'Title Key': 'title'})).toBe(after);
+  });
+});
+
+describe('Links', () => {
+  it('Regular link with spaces stays the same', () => {
+    const before = dedent`
+    # Hello world
+
+    [This has  spaces in it](File with  spaces.md)
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    [This has  spaces in it](File with  spaces.md)
+    `;
+
+    expect(rulesDict['trailing-spaces'].apply(before)).toBe(after);
+  });
+  it('Image link with spaces stays the same', () => {
+    const before = dedent`
+    # Hello world
+
+    ![This has  spaces in it](File with  spaces.png)
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    ![This has  spaces in it](File with  spaces.png)
+    `;
+
+    expect(rulesDict['trailing-spaces'].apply(before)).toBe(after);
+  });
+  it('Wiki link with spaces stays the same', () => {
+    const before = dedent`
+    # Hello world
+
+    [[File with  spaces]]
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    [[File with  spaces]]
+    `;
+
+    expect(rulesDict['trailing-spaces'].apply(before)).toBe(after);
+  });
+  it('Link in heading is still present with first letter capitalization rules on', () => {
+    const before = dedent`
+    # Heading [[docker]]
+    # Heading [docker](docker)
+    # Heading ![docker](docker)
+    `;
+
+    const after = dedent`
+    # Heading [[docker]]
+    # Heading [docker](docker)
+    # Heading ![docker](docker)
+    `;
+
+    expect(rulesDict['capitalize-headings'].apply(before, {'Style': 'First letter'})).toBe(after);
+  });
+  // accounts for https://github.com/platers/obsidian-linter/issues/236
+  it('Link after checkbox is not affected by removing whitespace in links', () => {
+    const before = dedent`
+    - [ ] [Link text](path/fileName.md)
+    - [ ] [[fileName]]
+    `;
+
+    const after = dedent`
+    - [ ] [Link text](path/fileName.md)
+    - [ ] [[fileName]]
+    `;
+
+    expect(rulesDict['remove-link-spacing'].apply(before)).toBe(after);
+  });
+});
+
+describe('Remove Multiple Spaces', () => {
+  it('Make sure spaces at the end of the line are ignored', () => {
+    const before = dedent`
+    # Hello world
+
+    Paragraph contents are here  
+    Second paragraph contents here  
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    Paragraph contents are here  
+    Second paragraph contents here  
+    `;
+
+    expect(rulesDict['remove-multiple-spaces'].apply(before)).toBe(after);
+  });
+  it('Make sure spaces at the start of the line are ignored', () => {
+    const before = '  Paragraph contents are here\n  Second paragraph here...';
+
+    const after = '  Paragraph contents are here\n  Second paragraph here...';
+
+    expect(rulesDict['remove-multiple-spaces'].apply(before)).toBe(after);
+  });
+  it('Make sure non-letter followed or preceeded by 2 spaces has them cut down to 1 space', () => {
+    const before = dedent`
+    # Hello world
+
+    Paragraph contents  (something). Something else  .
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    Paragraph contents (something). Something else .
+    `;
+
+    expect(rulesDict['remove-multiple-spaces'].apply(before)).toBe(after);
+  });
+  it('Links followed by parentheses do not prevent other removal of multiple spaces in a row', () => {
+    const before = dedent`
+    [Link text](path/fileName.md) (2 spaces in between  text)
+    `;
+
+    const after = dedent`
+    [Link text](path/fileName.md) (2 spaces in between text)
+    `;
+
+    expect(rulesDict['remove-multiple-spaces'].apply(before)).toBe(after);
+  });
+});
+
+describe('Remove Hyphenated Line Breaks', () => {
+  // accounts for https://github.com/platers/obsidian-linter/issues/241
+  it('Make sure text ending in a hyphen followed by a link does not trigger the hyphenated line break rule', () => {
+    const before = dedent`
+    # Hello world
+
+    Paragraph contents are here- [link text](pathToFile/file.md)
+    Paragraph contents are here- [[file]]
+    `;
+
+    const after = dedent`
+    # Hello world
+
+    Paragraph contents are here- [link text](pathToFile/file.md)
+    Paragraph contents are here- [[file]]
+    `;
+
+    expect(rulesDict['remove-hyphenated-line-breaks'].apply(before)).toBe(after);
   });
 });

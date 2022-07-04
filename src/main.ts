@@ -1,17 +1,46 @@
-import {App, Editor, EventRef, MarkdownView, Menu, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile} from 'obsidian';
+import {App, Editor, EventRef, MarkdownView, Menu, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TFolder} from 'obsidian';
 import {LinterSettings, Options, rules, getDisabledRules} from './rules';
 import DiffMatchPatch from 'diff-match-patch';
-import moment from 'moment';
 import {BooleanOption, DropdownOption, MomentFormatOption, TextAreaOption, TextOption} from './option';
 import dedent from 'ts-dedent';
 import {stripCr} from './utils';
+import log from 'loglevel';
+import {logInfo, logError, logDebug, setLogLevel} from './logger';
+
+
+// https://github.com/liamcain/obsidian-calendar-ui/blob/03ceecbf6d88ef260dadf223ee5e483d98d24ffc/src/localization.ts#L20-L43
+const langToMomentLocale = {
+  'en': 'en-gb',
+  'zh': 'zh-cn',
+  'zh-TW': 'zh-tw',
+  'ru': 'ru',
+  'ko': 'ko',
+  'it': 'it',
+  'id': 'id',
+  'ro': 'ro',
+  'pt-BR': 'pt-br',
+  'cz': 'cs',
+  'da': 'da',
+  'de': 'de',
+  'es': 'es',
+  'fr': 'fr',
+  'no': 'nn',
+  'pl': 'pl',
+  'pt': 'pt',
+  'tr': 'tr',
+  'hi': 'hi',
+  'nl': 'nl',
+  'ar': 'ar',
+  'ja': 'ja',
+};
 
 export default class LinterPlugin extends Plugin {
     settings: LinterSettings;
+    public momentInstance: any;
     private eventRef: EventRef;
 
     async onload() {
-      console.log('Loading Linter plugin');
+      logInfo('Loading plugin');
       await this.loadSettings();
 
       this.addCommand({
@@ -30,9 +59,41 @@ export default class LinterPlugin extends Plugin {
         id: 'lint-all-files',
         name: 'Lint all files in the vault',
         callback: () => {
-          new ConfirmationModal(this.app, this).open();
+          const startMessage = 'This will edit all of your files and may introduce errors.';
+          const submitBtnText = 'Lint All';
+          const submitBtnNoticeText = 'Linting all files...';
+          new LintConfirmationModal(this.app, startMessage, submitBtnText, submitBtnNoticeText, () =>{
+            return this.runLinterAllFiles(this.app);
+          }).open();
         },
       });
+
+      this.addCommand({
+        id: 'lint-all-files-in-folder',
+        name: 'Lint all files in the current folder',
+        editorCheckCallback: (checking: Boolean, _) => {
+          if (checking) {
+            return !this.app.workspace.getActiveFile().parent.isRoot();
+          }
+
+          this.createFolderLintModal(this.app.workspace.getActiveFile().parent);
+        },
+      });
+
+      // https://github.com/mgmeyers/obsidian-kanban/blob/main/src/main.ts#L239-L251
+      this.registerEvent(
+          this.app.workspace.on('file-menu', (menu, file: TFile) => {
+            // Add a menu item to the folder context menu to create a board
+            if (file instanceof TFolder) {
+              menu.addItem((item) => {
+                item
+                    .setTitle('Lint folder')
+                    .setIcon('wrench-screwdriver-glyph')
+                    .onClick(() => this.createFolderLintModal(file));
+              });
+            }
+          }),
+      );
 
       this.eventRef = this.app.workspace.on('file-menu',
           (menu, file, source) => this.onMenuOpenCallback(menu, file, source));
@@ -62,7 +123,7 @@ export default class LinterPlugin extends Plugin {
     }
 
     async onunload() {
-      console.log('Unloading Linter plugin');
+      logInfo('Unloading plugin');
       this.app.workspace.offref(this.eventRef);
     }
 
@@ -72,6 +133,8 @@ export default class LinterPlugin extends Plugin {
         lintOnSave: false,
         displayChanged: true,
         foldersToIgnore: [],
+        linterLocale: 'system-default',
+        logLevel: log.levels.ERROR,
       };
       const data = await this.loadData();
       const storedSettings = data || {};
@@ -99,6 +162,15 @@ export default class LinterPlugin extends Plugin {
       if (Object.prototype.hasOwnProperty.call(storedSettings, 'foldersToIgnore')) {
         this.settings.foldersToIgnore = storedSettings.foldersToIgnore;
       }
+      if (Object.prototype.hasOwnProperty.call(storedSettings, 'linterLocale')) {
+        this.settings.linterLocale = storedSettings.linterLocale;
+      }
+      if (Object.prototype.hasOwnProperty.call(storedSettings, 'logLevel')) {
+        this.settings.logLevel = storedSettings.logLevel;
+      }
+
+      setLogLevel(this.settings.logLevel);
+      this.setOrUpdateMomentInstance();
     }
     async saveSettings() {
       await this.saveData(this.settings);
@@ -119,31 +191,55 @@ export default class LinterPlugin extends Plugin {
     lintText(oldText: string, file: TFile) {
       let newText = oldText;
 
+      // escape YAML where possible before parsing yaml
+      const escape_yaml_rule = rules.find((rule) => rule.name === 'Escape YAML Special Characters');
+      const escape_yaml_options = escape_yaml_rule.getOptions(this.settings);
+      if (escape_yaml_options[escape_yaml_rule.enabledOptionName()]) {
+        newText = escape_yaml_rule.apply(newText, escape_yaml_options);
+      }
+
       // remove hashtags from tags before parsing yaml
       const tag_rule = rules.find((rule) => rule.name === 'Format Tags in YAML');
-      const options = tag_rule.getOptions(this.settings);
-      if (options[tag_rule.enabledOptionName()]) {
-        newText = tag_rule.apply(newText, options);
+      const tag_options = tag_rule.getOptions(this.settings);
+      if (tag_options[tag_rule.enabledOptionName()]) {
+        newText = tag_rule.apply(newText, tag_options);
       }
 
       const disabledRules = getDisabledRules(newText);
 
       for (const rule of rules) {
-        if (disabledRules.includes(rule.alias())) {
+        // if you are run prior to or after the regular rules or are a disabled rule, skip running the rule
+        if (disabledRules.includes(rule.alias()) || rule.alias() === 'yaml-timestamp' || rule.alias() === 'format-tags-in-yaml' || rule.alias() === 'escape-yaml-special-characters') {
           continue;
         }
 
         const options: Options =
           Object.assign({
-            'metadata: file created time': moment(file.stat.ctime).format(),
-            'metadata: file modified time': moment(file.stat.mtime).format(),
+            'metadata: file created time': this.momentInstance(file.stat.ctime).format(),
+            'metadata: file modified time': this.momentInstance(file.stat.mtime).format(),
             'metadata: file name': file.basename,
+            'moment': this.momentInstance,
           }, rule.getOptions(this.settings));
 
         if (options[rule.enabledOptionName()]) {
-          // console.log(`Running ${rule.name}`);
+          logDebug(`Running ${rule.name}`);
           newText = rule.apply(newText, options);
         }
+      }
+
+      // run yaml timestamp at the end to help determine if something has changed
+      const yaml_timestamp_rule = rules.find((rule) => rule.alias() === 'yaml-timestamp');
+      const yaml_timestamp_options: Options =
+      Object.assign({
+        'metadata: file created time': this.momentInstance(file.stat.ctime).format(),
+        'metadata: file modified time': this.momentInstance(file.stat.mtime).format(),
+        'metadata: file name': file.basename,
+        'Current Time': this.momentInstance(),
+        'Already Modified': oldText != newText,
+        'moment': this.momentInstance,
+      }, yaml_timestamp_rule.getOptions(this.settings));
+      if (yaml_timestamp_options[yaml_timestamp_rule.enabledOptionName()]) {
+        newText = yaml_timestamp_rule.apply(newText, yaml_timestamp_options);
       }
 
       return newText;
@@ -160,32 +256,100 @@ export default class LinterPlugin extends Plugin {
 
     async runLinterFile(file: TFile) {
       const oldText = stripCr(await this.app.vault.read(file));
+      const newText = this.lintText(oldText, file);
 
-      try {
-        const newText = this.lintText(oldText, file);
-        await this.app.vault.modify(file, newText);
-      } catch (error) {
-        new Notice('An error occured during linting. See console for details');
-        console.log(`Linting error in file: ${file.path}`);
-        console.error(error);
+      await this.app.vault.modify(file, newText);
+    }
+
+    async runLinterAllFiles(app: App) {
+      let numberOfErrors = 0;
+      await Promise.all(app.vault.getMarkdownFiles().map(async (file) => {
+        if (!this.shouldIgnoreFile(file)) {
+          try {
+            await this.runLinterFile(file);
+          } catch (error) {
+            if (error.name === 'YAMLException') {
+              new Notice(`There is an error in file "${file.path}" in the YAML ` + error.mark);
+            } else {
+              new Notice('An error occurred during linting. See console for details');
+            }
+
+            logError(`Lint All Files Error in File '${file.path}'`, error);
+
+            numberOfErrors+=1;
+          }
+        }
+      }));
+      if (numberOfErrors === 0) {
+        new Notice('Linted all files');
+      } else {
+        const amountOfErrorsMessage = numberOfErrors === 1 ? 'was 1 error': 'were ' + numberOfErrors + ' errors';
+        new Notice('Linted all files and there ' + amountOfErrorsMessage + '.');
       }
     }
 
-    async runLinterAllFiles() {
+    async runLinterAllFilesInFolder(folder: TFolder) {
+      logInfo('Linting folder ' + folder.name);
+
+      let numberOfErrors = 0;
+      let lintedFiles = 0;
       await Promise.all(this.app.vault.getMarkdownFiles().map(async (file) => {
-        if (!this.shouldIgnoreFile(file)) {
-          await this.runLinterFile(file);
+        if (this.convertPathToNormalizedString(file.path).startsWith(this.convertPathToNormalizedString(folder.path) + '|') && !this.shouldIgnoreFile(file)) {
+          try {
+            await this.runLinterFile(file);
+          } catch (error) {
+            if (error.name === 'YAMLException') {
+              new Notice(`There is an error in file "${file.path}" in the YAML ` + error.mark);
+            } else {
+              new Notice('An error occurred during linting. See console for details');
+            }
+
+            logError(`Lint All Files in Folder Error in File '${file.path}'`, error);
+
+            numberOfErrors+=1;
+          }
+
+          lintedFiles++;
         }
       }));
-      new Notice('Linted all files');
+      if (numberOfErrors === 0) {
+        new Notice('Linted all ' + lintedFiles + ' files in ' + folder.name + '.');
+      } else {
+        const amountOfErrorsMessage = numberOfErrors === 1 ? 'was 1 error': 'were ' + numberOfErrors + ' errors';
+        new Notice('Linted all ' + lintedFiles + ' files in ' + folder.name + ' and there ' + amountOfErrorsMessage + '.');
+      }
+    }
+
+    // convert the path separators to | in order to "normalize" the path for better comparisons
+    convertPathToNormalizedString(path: string): string {
+      return path.replace('\\', '|').replace('/', '|');
+    }
+
+    // handles the creation of the folder linting modal since this happens in multiple places and it should be consistent
+    createFolderLintModal(folder: TFolder) {
+      const startMessage = 'This will edit all of your files in ' + folder.name + ' including files in its subfolders which may introduce errors.';
+      const submitBtnText = 'Lint All Files in ' + folder.name;
+      const submitBtnNoticeText = 'Linting all files in ' + folder.name + '...';
+      new LintConfirmationModal(this.app, startMessage, submitBtnText, submitBtnNoticeText, () => this.runLinterAllFilesInFolder(folder)).open();
     }
 
     runLinterEditor(editor: Editor) {
-      console.log('running linter');
+      logInfo('Running linter');
 
       const file = this.app.workspace.getActiveFile();
       const oldText = editor.getValue();
-      const newText = this.lintText(oldText, file);
+      let newText: string;
+      try {
+        newText = this.lintText(oldText, file);
+      } catch (error) {
+        if (error.name === 'YAMLException') {
+          new Notice('There is an error in the YAML ' + error.mark);
+        } else {
+          new Notice('An error occurred during linting. See console for details');
+        }
+
+        logError(`Lint File Error in File '${file.path}'`, error);
+      }
 
       // Replace changed lines
       const dmp = new DiffMatchPatch.diff_match_patch(); // eslint-disable-line new-cap
@@ -216,6 +380,29 @@ export default class LinterPlugin extends Plugin {
       const charsAdded = changes.map((change) => change[0] == DiffMatchPatch.DIFF_INSERT ? change[1].length : 0).reduce((a, b) => a + b, 0);
       const charsRemoved = changes.map((change) => change[0] == DiffMatchPatch.DIFF_DELETE ? change[1].length : 0).reduce((a, b) => a + b, 0);
       this.displayChangedMessage(charsAdded, charsRemoved);
+    }
+
+    // based on https://github.com/liamcain/obsidian-calendar-ui/blob/03ceecbf6d88ef260dadf223ee5e483d98d24ffc/src/localization.ts#L85-L109
+    setOrUpdateMomentInstance() {
+      // loading moment as follows allows for updating the locale while using moment directly has issues loading the locale
+      const {moment} = window;
+
+      const obsidianLang: string = localStorage.getItem('language') || 'en';
+      const systemLang = navigator.language?.toLowerCase();
+
+      let momentLocale = langToMomentLocale[obsidianLang as keyof typeof langToMomentLocale];
+
+      if (this.settings.linterLocale !== 'system-default') {
+        momentLocale = this.settings.linterLocale;
+      } else if (systemLang.startsWith(obsidianLang)) {
+        // If the system locale is more specific (en-gb vs en), use the system locale.
+        momentLocale = systemLang;
+      }
+
+      const currentLocale = moment.locale(momentLocale);
+      logDebug(`Trying to switch Moment.js global locale to ${momentLocale}, got ${currentLocale}`);
+
+      this.momentInstance = moment;
     }
 
     private displayChangedMessage(charsAdded: number, charsRemoved: number) {
@@ -299,10 +486,14 @@ class SettingTab extends PluginSettingTab {
             .setName(this.name)
             .setDesc(this.description)
             .addDropdown((dropdown) => {
-              dropdown.setValue(settings.ruleConfigs[this.ruleName][this.name]);
+              // First, add all the available options
               for (const option of this.options) {
                 dropdown.addOption(option.value, option.value);
               }
+
+              // Set currently selected value from existing settings
+              dropdown.setValue(settings.ruleConfigs[this.ruleName][this.name]);
+
               dropdown.onChange((value) => {
                 this.setOption(value, settings);
                 plugin.settings = settings;
@@ -355,6 +546,8 @@ class SettingTab extends PluginSettingTab {
                 });
           });
 
+      this.addLocaleOverrideSetting();
+
       let prevSection = '';
 
       for (const rule of rules) {
@@ -372,35 +565,59 @@ class SettingTab extends PluginSettingTab {
         }
       }
     }
+
+    addLocaleOverrideSetting(): void {
+      const {moment} = window;
+      const sysLocale = navigator.language?.toLowerCase();
+
+      new Setting(this.containerEl)
+          .setName('Override locale:')
+          .setDesc(
+              'Set this if you want to use a locale different from the default',
+          )
+          .addDropdown((dropdown) => {
+            dropdown.addOption('system-default', `Same as system (${sysLocale})`);
+            moment.locales().forEach((locale) => {
+              dropdown.addOption(locale, locale);
+            });
+            dropdown.setValue(this.plugin.settings.linterLocale);
+            dropdown.onChange(async (value) => {
+              this.plugin.settings.linterLocale = value;
+              this.plugin.setOrUpdateMomentInstance();
+              await this.plugin.saveSettings();
+            });
+          });
+    }
 }
 
 // https://github.com/nothingislost/obsidian-workspaces-plus/blob/bbba928ec64b30b8dec7fe8fc9e5d2d96543f1f3/src/modal.ts#L68
-class ConfirmationModal extends Modal {
-  constructor(app: App, plugin: LinterPlugin) {
+class LintConfirmationModal extends Modal {
+  constructor(app: App, startModalMessageText: string, submitBtnText: string,
+      submitBtnNoticeText: string, btnSubmitAction: () => Promise<void>) {
     super(app);
     this.modalEl.addClass('confirm-modal');
 
     this.contentEl.createEl('h3', {text: 'Warning'});
 
     const e: HTMLParagraphElement = this.contentEl.createEl('p',
-        {text: 'This will edit all of your files and may introduce errors. Make sure you have backed up your files.'});
+        {text: startModalMessageText + ' Make sure you have backed up your files.'});
     e.id = 'confirm-dialog';
 
     this.contentEl.createDiv('modal-button-container', (buttonsEl) => {
       buttonsEl.createEl('button', {text: 'Cancel'}).addEventListener('click', () => this.close());
 
-      const btnSumbit = buttonsEl.createEl('button', {
+      const btnSubmit = buttonsEl.createEl('button', {
         attr: {type: 'submit'},
         cls: 'mod-cta',
-        text: 'Lint All',
+        text: submitBtnText,
       });
-      btnSumbit.addEventListener('click', async (e) => {
-        new Notice('Linting all files...');
+      btnSubmit.addEventListener('click', async (e) => {
+        new Notice(submitBtnNoticeText);
         this.close();
-        await plugin.runLinterAllFiles();
+        await btnSubmitAction();
       });
       setTimeout(() => {
-        btnSumbit.focus();
+        btnSubmit.focus();
       }, 50);
     });
   }
