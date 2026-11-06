@@ -4,7 +4,7 @@ import { LinterError } from "../linter-error";
 import { logError } from "./logger";
 import { YAMLParseError } from "yaml";
 
-export function handleLintError(file: TFile, error: Error, noticeTimeout: number, logErrorStringTemplate: string, useLogTemplateInNotice: boolean = true) {
+export function handleLintError(file: Pick<TFile, 'path'>, error: Error, noticeTimeout: number, logErrorStringTemplate: string, useLogTemplateInNotice: boolean = true) {
   const errorMessage = logErrorStringTemplate.replace('{FILE_PATH}', file.path);
   const seeConsoleText = getTextInLanguage('logs.see-console');
 
@@ -38,7 +38,7 @@ export function wrapLintError(error: Error, identifier: string) {
   throw new LinterError(getTextInLanguage('logs.error-message-format').replace('{RULE_NAME}', identifier).replace('{ERROR_MESSAGE}', errorMessage), error);
 }
 
-export function ensureIsLinteError(error, identifier: string): LinterError {
+export function ensureIsLinteError(error: unknown, identifier: string): LinterError {
   let newErr = error as LinterError;
   if (!(error instanceof LinterError)) {
     try {
